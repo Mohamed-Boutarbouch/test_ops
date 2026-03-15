@@ -34,18 +34,9 @@ jobs:
           POSTGRES_DB: testing
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: secret
-        # Do not bind host ports on the runner (can cause conflicts / permissions issues)
-        # GitHub Actions services are accessible by service name from the job container.
-        # Health check options must be passed as a single argument; quote the command.
-        options: >-
-          --health-cmd="pg_isready -U postgres -d testing"
-          --health-interval=5s --health-timeout=5s --health-retries=10
 
       redis:
         image: redis:alpine
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s --health-timeout=5s --health-retries=10
 
     steps:
       - name: Checkout
@@ -58,10 +49,10 @@ jobs:
           extensions: mbstring, bcmath, pdo, pdo_pgsql
           tools: composer:v2
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Bun (JS runtime/package manager)
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '22'
+          bun-version: latest
 
       - name: Cache Composer dependencies
         uses: actions/cache@v4
@@ -69,19 +60,17 @@ jobs:
           path: vendor
           key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-composer-
-
-      - name: Cache node modules
+      - name: Cache Bun cache
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-          restore-keys: ${{ runner.os }}-node-
-
+          path: ~/.bun
+          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb', '**/package.json') }}
+          restore-keys: ${{ runner.os }}-bun-
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
-      - name: Install Node dependencies
-        run: npm ci
+      - name: Install JS dependencies (bun)
+        run: bun install
 
       - name: Copy environment file
         run: php -r "file_exists('.env') || copy('.env.example', '.env');"
@@ -97,16 +86,16 @@ jobs:
           done
 
       - name: Build frontend assets
-        run: npm run build
+        run: bun run build
 
       - name: Run PHP linter (Pint)
         run: composer lint
 
       - name: Run frontend linter
-        run: npm run lint
+        run: bun run lint
 
       - name: Type check frontend
-        run: npm run types:check
+        run: bun run types:check
 
       - name: Run tests (Pest)
         run: ./vendor/bin/pest --colors=always
