@@ -28,22 +28,24 @@ jobs:
 
     services:
       postgres:
-        image: postgres:18-alpine
+        # Use a broadly-available alpine tag to reduce image-not-found risk
+        image: postgres:15-alpine
         env:
           POSTGRES_DB: testing
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: secret
-        ports: ['5432:5432']
+        # Do not bind host ports on the runner (can cause conflicts / permissions issues)
+        # GitHub Actions services are accessible by service name from the job container.
+        # Health check options must be passed as a single argument; quote the command.
         options: >-
-          --health-cmd pg_isready -U postgres -d testing
-          --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-cmd="pg_isready -U postgres -d testing"
+          --health-interval=5s --health-timeout=5s --health-retries=10
 
       redis:
         image: redis:alpine
-        ports: ['6379:6379']
         options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=10
 
     steps:
       - name: Checkout
