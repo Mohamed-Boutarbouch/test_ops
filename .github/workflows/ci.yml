@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: testing
+      APP_DEBUG: '1'
+      DB_CONNECTION: pgsql
+      # When using GitHub Actions services, use the service hostname ("postgres")
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: testing
+      DB_USERNAME: postgres
+      DB_PASSWORD: secret
+      # Redis service hostname in Actions
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CACHE_DRIVER: redis
+      SESSION_DRIVER: redis
+      QUEUE_CONNECTION: sync
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: testing
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: secret
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready -U postgres -d testing
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+      redis:
+        image: redis:alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, bcmath, pdo, pdo_pgsql
+          tools: composer:v2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Copy environment file
+        run: php -r "file_exists('.env') || copy('.env.example', '.env');"
+
+      - name: Generate App Key
+        run: php artisan key:generate --ansi
+
+      - name: Wait for database and run migrations
+        # Attempt migrations repeatedly to wait for the postgres service
+        run: |
+          for i in {1..30}; do
+            php artisan migrate --force && break || sleep 2
+          done
+
+      - name: Build frontend assets
+        run: npm run build
+
+      - name: Run PHP linter (Pint)
+        run: composer lint
+
+      - name: Run frontend linter
+        run: npm run lint
+
+      - name: Type check frontend
+        run: npm run types:check
+
+      - name: Run tests (Pest)
+        run: ./vendor/bin/pest --colors=always
+
+      - name: Upload test results (junit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pest-results
+          path: tests/*.xml
