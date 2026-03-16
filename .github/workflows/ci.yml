@@ -1,5 +1,4 @@
 name: CI
-
 on:
   push:
     branches: [main, master, develop]
@@ -9,34 +8,31 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      APP_ENV: testing
-      APP_DEBUG: '1'
-      DB_CONNECTION: pgsql
-      # When using GitHub Actions services, use the service hostname ("postgres")
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_DATABASE: testing
-      DB_USERNAME: postgres
-      DB_PASSWORD: secret
-      # Redis service hostname in Actions
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      CACHE_DRIVER: redis
-      SESSION_DRIVER: redis
-      QUEUE_CONNECTION: sync
 
     services:
       postgres:
-        # Use a broadly-available alpine tag to reduce image-not-found risk
         image: postgres:15-alpine
         env:
           POSTGRES_DB: testing
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
       redis:
         image: redis:alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -45,11 +41,11 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.5'
-          extensions: mbstring, bcmath, pdo, pdo_pgsql
+          php-version: '8.4'
+          extensions: mbstring, bcmath, pdo, pdo_pgsql, redis
           tools: composer:v2
 
-      - name: Setup Bun (JS runtime/package manager)
+      - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -60,30 +56,39 @@ jobs:
           path: vendor
           key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
           restore-keys: ${{ runner.os }}-composer-
+
       - name: Cache Bun cache
         uses: actions/cache@v4
         with:
           path: ~/.bun
           key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb', '**/package.json') }}
           restore-keys: ${{ runner.os }}-bun-
+
       - name: Install PHP dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
-      - name: Install JS dependencies (bun)
+      - name: Install JS dependencies
         run: bun install
 
       - name: Copy environment file
         run: php -r "file_exists('.env') || copy('.env.example', '.env');"
 
+      - name: Override env for CI
+        run: |
+          sed -i 's/^DB_HOST=.*/DB_HOST=127.0.0.1/' .env
+          sed -i 's/^DB_DATABASE=.*/DB_DATABASE=testing/' .env
+          sed -i 's/^DB_USERNAME=.*/DB_USERNAME=postgres/' .env
+          sed -i 's/^DB_PASSWORD=.*/DB_PASSWORD=secret/' .env
+          sed -i 's/^SESSION_DRIVER=.*/SESSION_DRIVER=redis/' .env
+          sed -i 's/^CACHE_STORE=.*/CACHE_STORE=redis/' .env
+          sed -i 's/^REDIS_HOST=.*/REDIS_HOST=127.0.0.1/' .env
+          echo "CACHE_DRIVER=redis" >> .env
+
       - name: Generate App Key
         run: php artisan key:generate --ansi
 
-      - name: Wait for database and run migrations
-        # Attempt migrations repeatedly to wait for the postgres service
-        run: |
-          for i in {1..30}; do
-            php artisan migrate --force && break || sleep 2
-          done
+      - name: Run migrations
+        run: php artisan migrate --force
 
       - name: Build frontend assets
         run: bun run build
@@ -100,7 +105,7 @@ jobs:
       - name: Run tests (Pest)
         run: ./vendor/bin/pest --colors=always
 
-      - name: Upload test results (junit)
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
